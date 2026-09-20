@@ -1,0 +1,158 @@
+alias Duration.Unit as TimeUnit
+alias Test.require
+alias TimeZone.Offset
+alias TimeZone.Resolution
+
+priv fn at(seconds: Int) -> Timestamp
+  Timestamp.new(seconds, TimeUnit.Seconds)
+end
+
+priv fn offset(seconds: Int) -> Offset
+  Offset{seconds: seconds}
+end
+
+priv fn local(year: Int, month: Int, day: Int, hour: Int, minute: Int)
+  -> LocalDateTime
+
+  Date{day: day, month: month, year: year}.at(
+    Time{hour: hour, microsecond: 0, minute: minute, second: 0},
+  )
+end
+
+test "IANA_VERSION names the release the data came from"
+  assert IANA_VERSION == "2026d"
+end
+
+test "zone returns a Named zone that knows its identifier"
+  chicago = try require(zone("America/Chicago"))
+  assert chicago.identifier() == "America/Chicago"
+
+  match chicago
+    TimeZone.Named(rules) ->
+      assert rules.identifier == "America/Chicago"
+      assert rules.initial == offset(-21_036)
+      assert rules.transitions.length() > 100
+
+    other ->
+      fail "expected Named, got #{other}"
+  end
+end
+
+test "zone fails with Unknown for an identifier the release lacks"
+  match zone("Mars/Olympus_Mons")
+    Result.Err(Error.Unknown(identifier)) ->
+      assert identifier == "Mars/Olympus_Mons"
+    other -> fail "expected Unknown, got #{other}"
+  end
+
+  assert zone("america/chicago").err?()
+  assert zone("").err?()
+end
+
+test "Chicago follows its history, its rule, and its local mean time"
+  chicago = try require(zone("America/Chicago"))
+  assert chicago.offset_at(at(-5_364_662_400)) == offset(-21_036)
+  assert chicago.offset_at(at(-2_193_350_400)) == offset(-21_600)
+  assert chicago.offset_at(at(1_768_478_400)) == offset(-21_600)
+  assert chicago.offset_at(at(1_784_116_800)) == offset(-18_000)
+  assert chicago.offset_at(at(4_102_444_800)) == offset(-21_600)
+  assert chicago.offset_at(at(4_118_083_200)) == offset(-18_000)
+end
+
+test "Chicago skips 02:30 on the second Sunday of March"
+  chicago = try require(zone("America/Chicago"))
+
+  match local(2026, 3, 8, 2, 30).in_zone(chicago)
+    Resolution.Gap(before, following) ->
+      assert before.timestamp == at(1_772_955_000)
+      assert following.timestamp == at(1_772_958_600)
+      assert following.local() == local(2026, 3, 8, 3, 30)
+
+    other ->
+      fail "expected Gap, got #{other}"
+  end
+end
+
+test "Chicago repeats 01:30 on the first Sunday of November"
+  chicago = try require(zone("America/Chicago"))
+
+  match local(2026, 11, 1, 1, 30).in_zone(chicago)
+    Resolution.Ambiguous(earlier, later) ->
+      assert earlier.timestamp == at(1_793_514_600)
+      assert later.timestamp == at(1_793_518_200)
+      assert earlier.offset() == offset(-18_000)
+      assert later.offset() == offset(-21_600)
+
+    other ->
+      fail "expected Ambiguous, got #{other}"
+  end
+end
+
+test "Asuncion stays at -03 after Paraguay's 2024 change"
+  asuncion = try require(zone("America/Asuncion"))
+  assert asuncion.offset_at(at(1_721_044_800)) == offset(-14_400)
+  assert asuncion.offset_at(at(1_768_478_400)) == offset(-10_800)
+  assert asuncion.offset_at(at(1_784_116_800)) == offset(-10_800)
+
+  noon = try require(local(2026, 7, 15, 12, 0).in_zone(asuncion).unique())
+  assert noon.timestamp == at(1_784_116_800 + 3 * 3_600)
+end
+
+test "Tokyo has no daylight rule"
+  tokyo = try require(zone("Asia/Tokyo"))
+
+  match tokyo
+    TimeZone.Named(rules) -> assert rules.final.daylight == Option.None
+    other -> fail "expected Named, got #{other}"
+  end
+
+  assert tokyo.offset_at(at(1_768_478_400)) == offset(32_400)
+  assert tokyo.offset_at(at(1_784_116_800)) == offset(32_400)
+end
+
+test "Dublin's negative daylight saving still reads GMT in winter"
+  dublin = try require(zone("Europe/Dublin"))
+  assert dublin.offset_at(at(1_768_478_400)) == Offset.UTC
+  assert dublin.offset_at(at(1_784_116_800)) == offset(3_600)
+
+  match local(2026, 3, 29, 1, 30).in_zone(dublin)
+    Resolution.Gap(_, following) ->
+      assert following.local() == local(2026, 3, 29, 2, 30)
+    other -> fail "expected Gap, got #{other}"
+  end
+end
+
+test "a link resolves to its target's rules and keeps its own name"
+  central = try require(zone("US/Central"))
+  chicago = try require(zone("America/Chicago"))
+  assert central.identifier() == "US/Central"
+  assert central != chicago
+  assert central.offset_at(at(1_768_478_400)) ==
+    chicago.offset_at(at(1_768_478_400))
+  assert central.offset_at(at(1_784_116_800)) ==
+    chicago.offset_at(at(1_784_116_800))
+end
+
+test "identifiers lists every zone and then every link, sorted"
+  all = identifiers()
+  assert all.length() == 597
+  assert all.first() == Option.Some("Africa/Abidjan")
+  assert all.any?(name -> name == "America/Chicago")
+  assert all.any?(name -> name == "US/Central")
+  assert all.any?(name -> name == "Etc/UTC")
+
+  for name in all
+    assert zone(name).ok?()
+  end
+end
+
+test "ISO8601 writes a Named zone as its offset"
+  chicago = try require(zone("America/Chicago"))
+  summer = try require(local(2026, 7, 15, 12, 0).in_zone(chicago).unique())
+  assert summer.to_string() == "2026-07-15T12:00:00-05:00"
+
+  utc = try require(zone("Etc/UTC"))
+  assert utc.identifier() == "Etc/UTC"
+  assert DateTime{timestamp: at(1_784_116_800), zone: utc}.to_string() ==
+    "2026-07-15T12:00:00+00:00"
+end

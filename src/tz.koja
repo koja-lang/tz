@@ -1,0 +1,41 @@
+@doc """
+Why `zone` could not build a `TimeZone`. `Unknown` carries the
+identifier this release of the tz database does not have.
+"""
+enum Error
+  Unknown(String)
+end
+
+@doc """
+Returns every identifier `zone` accepts. The zones in this release
+come first in sorted order, then their links in sorted order.
+"""
+fn identifiers -> List<String>
+  zone_identifiers().concat(link_identifiers())
+end
+
+@doc """
+Returns the `TimeZone.Named` zone for an IANA identifier such as
+`America/Chicago`. The zone carries its whole transition table, so
+the returned value never consults this package again.
+
+A link such as `US/Central` resolves to the rules of its target and
+keeps the identifier it was asked for, so `zone("US/Central")` and
+`zone("America/Chicago")` agree on every instant and differ under
+`==`, the way java.time and jiff treat them.
+
+Fails with `TZ.Error.Unknown` for an identifier this release does not
+know. Identifiers are case sensitive.
+"""
+fn zone(identifier: String) -> TimeZone ! Error
+  canonical =
+    match link_target(identifier)
+      Option.Some(target) -> target
+      Option.None -> identifier
+    end
+
+  match packed(canonical)
+    Option.Some(text) -> TimeZone.Named(unpack(identifier, text))
+    Option.None -> fail Error.Unknown(identifier)
+  end
+end

@@ -1,0 +1,101 @@
+alias Test.require
+alias TimeZone.Offset
+alias TimeZone.Rule
+
+priv fn point(month: Int, week: Int, weekday: Weekday, seconds: Int)
+  -> Rule.Point
+
+  Rule.Point{month: month, seconds: seconds, week: week, weekday: weekday}
+end
+
+test "parse_posix_rule reads a plain standard offset"
+  assert try require(parse_posix_rule("UTC0")) ==
+    Rule{daylight: Option.None, standard: Offset.UTC}
+  assert try require(parse_posix_rule("JST-9")) ==
+    Rule{daylight: Option.None, standard: Offset{seconds: 32_400}}
+  assert try require(parse_posix_rule("<-03>3")) ==
+    Rule{daylight: Option.None, standard: Offset{seconds: -10_800}}
+  assert try require(parse_posix_rule("<+0545>-5:45")) ==
+    Rule{daylight: Option.None, standard: Offset{seconds: 20_700}}
+end
+
+test "parse_posix_rule reads a daylight rule with default times"
+  rule = try require(parse_posix_rule("CST6CDT,M3.2.0,M11.1.0"))
+  assert rule.standard == Offset{seconds: -21_600}
+
+  match rule.daylight
+    Option.Some(daylight) ->
+      assert daylight.offset == Offset{seconds: -18_000}
+      assert daylight.start == point(3, 2, Weekday.Sunday, 7_200)
+      assert daylight.stop == point(11, 1, Weekday.Sunday, 7_200)
+
+    Option.None ->
+      fail "expected a daylight rule"
+  end
+end
+
+test "parse_posix_rule reads explicit daylight offsets and times"
+  rule = try require(parse_posix_rule("<+1030>-10:30<+11>-11,M10.1.0,M4.1.0"))
+  assert rule.standard == Offset{seconds: 37_800}
+
+  match rule.daylight
+    Option.Some(daylight) ->
+      assert daylight.offset == Offset{seconds: 39_600}
+      assert daylight.start == point(10, 1, Weekday.Sunday, 7_200)
+      assert daylight.stop == point(4, 1, Weekday.Sunday, 7_200)
+
+    Option.None ->
+      fail "expected a daylight rule"
+  end
+
+  santiago = try require(parse_posix_rule("<-04>4<-03>,M9.1.6/24,M4.1.6/24"))
+
+  match santiago.daylight
+    Option.Some(daylight) ->
+      assert daylight.start == point(9, 1, Weekday.Saturday, 86_400)
+      assert daylight.stop == point(4, 1, Weekday.Saturday, 86_400)
+
+    Option.None ->
+      fail "expected a daylight rule"
+  end
+end
+
+test "parse_posix_rule reads negative and zero transition times"
+  rule = try require(parse_posix_rule("<-02>2<-01>,M3.5.0/-1,M10.5.0/0"))
+
+  match rule.daylight
+    Option.Some(daylight) ->
+      assert daylight.start == point(3, 5, Weekday.Sunday, -3_600)
+      assert daylight.stop == point(10, 5, Weekday.Sunday, 0)
+
+    Option.None ->
+      fail "expected a daylight rule"
+  end
+end
+
+test "parse_posix_rule reads Ireland's negative daylight saving"
+  rule = try require(parse_posix_rule("IST-1GMT0,M10.5.0,M3.5.0/1"))
+  assert rule.standard == Offset{seconds: 3_600}
+
+  match rule.daylight
+    Option.Some(daylight) ->
+      assert daylight.offset == Offset.UTC
+      assert daylight.start == point(10, 5, Weekday.Sunday, 7_200)
+      assert daylight.stop == point(3, 5, Weekday.Sunday, 3_600)
+
+    Option.None ->
+      fail "expected a daylight rule"
+  end
+end
+
+test "parse_posix_rule rejects what zic never writes"
+  assert parse_posix_rule("").err?()
+  assert parse_posix_rule("CST").err?()
+  assert parse_posix_rule("CST6CDT").err?()
+  assert parse_posix_rule("CST6CDT,J60,M11.1.0").err?()
+  assert parse_posix_rule("CST6CDT,M3.2.0").err?()
+  assert parse_posix_rule("CST6CDT,M13.2.0,M11.1.0").err?()
+  assert parse_posix_rule("CST6CDT,M3.2.7,M11.1.0").err?()
+  assert parse_posix_rule("CST6CDT,M3.2.0,M11.1.0x").err?()
+  assert parse_posix_rule("<-03").err?()
+end

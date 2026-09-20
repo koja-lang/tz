@@ -1,0 +1,37 @@
+alias Test.require
+alias TimeZone.Offset
+
+# A slim TZif file for America/Chicago from tzdata 2026d.
+priv const FIXTURE: String = "test/fixtures/America_Chicago"
+
+test "read_tzif reads the 64-bit block of a slim TZif file"
+  bytes = try require(File.read_binary(FIXTURE))
+  rules = try require(read_tzif("America/Chicago", bytes))
+  assert rules.identifier == "America/Chicago"
+  assert rules.initial == Offset{seconds: -21_036}
+  assert rules.transitions.length() == 175
+
+  first = rules.transitions.first().unwrap()
+  assert first.at == Timestamp.new(-2_717_647_200, Duration.Unit.Seconds)
+  assert first.offset == Offset{seconds: -21_600}
+
+  last = rules.transitions.last().unwrap()
+  assert last.at == Timestamp.new(1_173_600_000, Duration.Unit.Seconds)
+  assert last.offset == Offset{seconds: -18_000}
+end
+
+test "read_tzif reads the POSIX rule from the footer"
+  bytes = try require(File.read_binary(FIXTURE))
+  rules = try require(read_tzif("America/Chicago", bytes))
+  assert rules.final == try require(parse_posix_rule("CST6CDT,M3.2.0,M11.1.0"))
+end
+
+test "read_tzif matches the packed data for the same zone"
+  bytes = try require(File.read_binary(FIXTURE))
+  rules = try require(read_tzif("America/Chicago", bytes))
+  assert pack(rules) == packed("America/Chicago").unwrap()
+end
+
+test "read_tzif rejects a file without the magic"
+  assert read_tzif("Nope", "not a tzif file at all".to_binary()).err?()
+end

@@ -1,0 +1,179 @@
+alias TimeZone.Offset
+alias TimeZone.Rule
+alias TimeZone.Rules
+alias TimeZone.Transition
+
+# The text form one zone is stored in. Fields are separated by `;`.
+# The first is the offset before any transition, the second is the
+# final rule, and every field after that is one transition as
+# `seconds,offset`.
+#
+# The rule is `standard` alone for a zone with no daylight saving, or
+# `standard,daylight,month,week,day,seconds,month,week,day,seconds`
+# with the start point first and the stop point second. `day` is the
+# POSIX weekday, 0 for Sunday through 6 for Saturday. Every number is
+# an integer count of seconds, so the decoder never reads a POSIX TZ
+# string.
+#
+# Packed text is written by `koja run tz.generate` and read by `zone`.
+# A string that does not decode is a generator bug, so `unpack` traps
+# instead of failing.
+
+priv const FIELD: String = ";"
+priv const ITEM: String = ","
+priv const DAYS_PER_WEEK: Int = 7
+
+priv fn pack(rules: Rules) -> String
+  fields: List<String> = ["#{rules.initial.seconds}", pack_rule(rules.final)]
+
+  for transition in rules.transitions
+    fields = fields.append(
+      "#{epoch_seconds(transition.at)}#{ITEM}#{transition.offset.seconds}",
+    )
+  end
+
+  String.join(fields, FIELD)
+end
+
+priv fn unpack(identifier: String, text: String) -> Rules
+  fields = text.split(FIELD)
+  initial = unpack_int(field(fields, 0, text))
+  final = unpack_rule(field(fields, 1, text), text)
+  transitions: List<Transition> = List.new()
+  index = 2
+
+  while index < fields.length()
+    transitions = transitions.append(
+      unpack_transition(field(fields, index, text), text),
+    )
+    index += 1
+  end
+
+  Rules{
+    final: final,
+    identifier: identifier,
+    initial: Offset{seconds: initial},
+    transitions: transitions,
+  }
+end
+
+priv fn pack_rule(rule: Rule) -> String
+  match rule.daylight
+    Option.None ->
+      "#{rule.standard.seconds}"
+
+    Option.Some(daylight) ->
+      String.join(
+        [
+          "#{rule.standard.seconds}", "#{daylight.offset.seconds}",
+          pack_point(daylight.start), pack_point(daylight.stop)
+        ],
+        ITEM,
+      )
+  end
+end
+
+priv fn pack_point(point: Rule.Point) -> String
+  day = point.weekday.iso_number() % DAYS_PER_WEEK
+  "#{point.month}#{ITEM}#{point.week}#{ITEM}#{day}#{ITEM}#{point.seconds}"
+end
+
+priv fn unpack_rule(text: String, whole: String) -> Rule
+  items = text.split(ITEM)
+  standard = Offset{seconds: unpack_int(field(items, 0, whole))}
+
+  match items.length()
+    1 ->
+      Rule{daylight: Option.None, standard: standard}
+
+    10 ->
+      Rule{
+        daylight: Option.Some(Rule.Daylight{
+          offset: Offset{seconds: unpack_int(field(items, 1, whole))},
+          start: unpack_point(items, 2, whole),
+          stop: unpack_point(items, 6, whole),
+        }),
+        standard: standard,
+      }
+
+    _ ->
+      Kernel.panic("TZ: malformed rule in packed zone #{whole}")
+  end
+end
+
+priv fn unpack_point(items: List<String>, start: Int, whole: String)
+  -> Rule.Point
+
+  Rule.Point{
+    month: unpack_int(field(items, start, whole)),
+    seconds: unpack_int(field(items, start + 3, whole)),
+    week: unpack_int(field(items, start + 1, whole)),
+    weekday: weekday_from_posix(unpack_int(field(items, start + 2, whole))),
+  }
+end
+
+priv fn unpack_transition(text: String, whole: String) -> Transition
+  items = text.split(ITEM)
+
+  if items.length() != 2
+    Kernel.panic("TZ: malformed transition in packed zone #{whole}")
+  end
+
+  Transition{
+    at: Timestamp.new(unpack_int(field(items, 0, whole)), Duration.Unit.Seconds),
+    offset: Offset{seconds: unpack_int(field(items, 1, whole))},
+  }
+end
+
+priv fn field(items: List<String>, index: Int, whole: String) -> String
+  match items.get(index)
+    Option.Some(item) ->
+      item
+
+    Option.None ->
+      Kernel.panic("TZ: missing field #{index} in packed zone #{whole}")
+  end
+end
+
+priv fn unpack_int(text: String) -> Int
+  Int.parse(text)
+    rescue _ -> Kernel.panic(
+      "TZ: `#{text}` is not an integer in packed zone data",
+    )
+end
+
+# Whole seconds since the epoch, floored.
+priv fn epoch_seconds(at: Timestamp) -> Int
+  micros = at.since_epoch.to_microseconds()
+  quotient = micros / 1_000_000
+  micros % 1_000_000 < 0 ? quotient - 1 : quotient
+end
+
+# The POSIX weekday number, 0 for Sunday through 6 for Saturday.
+priv fn weekday_from_posix(day: Int) -> Weekday
+  match day
+    0 ->
+      Weekday.Sunday
+
+    1 ->
+      Weekday.Monday
+
+    2 ->
+      Weekday.Tuesday
+
+    3 ->
+      Weekday.Wednesday
+
+    4 ->
+      Weekday.Thursday
+
+    5 ->
+      Weekday.Friday
+
+    6 ->
+      Weekday.Saturday
+
+    _ ->
+      Kernel.panic("TZ: weekday #{day} is outside 0..6 in packed zone data")
+  end
+end

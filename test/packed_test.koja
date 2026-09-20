@@ -1,0 +1,90 @@
+alias TimeZone.Offset
+alias TimeZone.Rule
+alias TimeZone.Rules
+alias TimeZone.Transition
+
+priv fn chicago_rules -> Rules
+  Rules{
+    final: Rule{
+      daylight: Option.Some(Rule.Daylight{
+        offset: Offset{seconds: -18_000},
+        start: Rule.Point{
+          month: 3,
+          seconds: 7_200,
+          week: 2,
+          weekday: Weekday.Sunday,
+        },
+        stop: Rule.Point{
+          month: 11,
+          seconds: 7_200,
+          week: 1,
+          weekday: Weekday.Sunday,
+        },
+      }),
+      standard: Offset{seconds: -21_600},
+    },
+    identifier: "America/Chicago",
+    initial: Offset{seconds: -21_036},
+    transitions: [
+      Transition{
+        at: Timestamp.new(-2_717_647_200, Duration.Unit.Seconds),
+        offset: Offset{seconds: -21_600},
+      },
+      Transition{
+        at: Timestamp.new(-1_633_276_800, Duration.Unit.Seconds),
+        offset: Offset{seconds: -18_000},
+      }
+    ],
+  }
+end
+
+test "pack writes the documented text form"
+  assert pack(chicago_rules()) ==
+    "-21036;-21600,-18000,3,2,0,7200,11,1,0,7200;-2717647200,-21600;-1633276800,-18000"
+end
+
+test "pack writes a rule with no daylight saving as one number"
+  rules = Rules{
+    final: Rule{daylight: Option.None, standard: Offset{seconds: 32_400}},
+    identifier: "Asia/Tokyo",
+    initial: Offset{seconds: 33_539},
+    transitions: [],
+  }
+  assert pack(rules) == "33539;32400"
+  assert unpack("Asia/Tokyo", "33539;32400") == rules
+end
+
+test "unpack reads pack's output back"
+  rules = chicago_rules()
+  assert unpack("America/Chicago", pack(rules)) == rules
+end
+
+test "unpack keeps the identifier it is given"
+  rules = unpack("US/Central", pack(chicago_rules()))
+  assert rules.identifier == "US/Central"
+  assert rules.transitions == chicago_rules().transitions
+end
+
+test "pack floors a transition that is not on a whole second"
+  rules = Rules{
+    final: Rule{daylight: Option.None, standard: Offset.UTC},
+    identifier: "Test/Fraction",
+    initial: Offset.UTC,
+    transitions: [
+      Transition{
+        at: Timestamp.new(-1_500, Duration.Unit.Milliseconds),
+        offset: Offset.UTC,
+      }
+    ],
+  }
+  assert pack(rules) == "0;0;-2,0"
+end
+
+test "every packed zone decodes and packs back to the same text"
+  for identifier in zone_identifiers()
+    text = packed(identifier).unwrap()
+    rules = unpack(identifier, text)
+    assert rules.identifier == identifier
+    assert pack(rules) == text
+  end
+end

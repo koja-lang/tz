@@ -1,0 +1,85 @@
+name: tzdata
+
+# Checks IANA once a day. When a release newer than the one in
+# src/data/ exists, regenerates the data, bumps the version, and opens
+# a pull request for review.
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    name: Update tzdata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Compare with the latest IANA release
+        id: latest
+        run: |
+          set -euo pipefail
+          current=$(sed -n 's/^const IANA_VERSION: String = "\(.*\)"$/\1/p' src/data/version.koja)
+          tmp=$(mktemp -d)
+          curl -fsSL https://data.iana.org/time-zones/tzdata-latest.tar.gz -o "$tmp/tzdata.tar.gz"
+          latest=$(tar -xzOf "$tmp/tzdata.tar.gz" version | tr -d '[:space:]')
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          if [ "$current" = "$latest" ]; then
+            echo "src/data is at $current, nothing to do"
+            echo "update=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "src/data is at $current, IANA is at $latest"
+            echo "update=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install koja
+        if: steps.latest.outputs.update == 'true'
+        uses: koja-lang/setup-koja@v1
+        with:
+          koja-version-file: koja.toml
+
+      - name: Regenerate src/data
+        if: steps.latest.outputs.update == 'true'
+        run: bin/update-tzdata.sh "${{ steps.latest.outputs.latest }}"
+
+      - name: Bump the version
+        if: steps.latest.outputs.update == 'true'
+        id: version
+        run: |
+          set -euo pipefail
+          release="${{ steps.latest.outputs.latest }}"
+          year="${release%?}"
+          letter="${release: -1}"
+          index=$(( $(printf '%d' "'$letter") - 96 ))
+          version="$year.$index.0"
+          sed -i "s/^version = \".*\"$/version = \"$version\"/" koja.toml
+          bin/changelog-add.sh Changed "tzdata $release."
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check the result
+        if: steps.latest.outputs.update == 'true'
+        run: |
+          koja check
+          koja test
+
+      - name: Open a pull request
+        if: steps.latest.outputs.update == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: tzdata/${{ steps.latest.outputs.latest }}
+          commit-message: "Update to tzdata ${{ steps.latest.outputs.latest }}"
+          title: "Update to tzdata ${{ steps.latest.outputs.latest }}"
+          body: |
+            IANA published tzdata ${{ steps.latest.outputs.latest }}. This
+            regenerates `src/data/` from it and sets the version to
+            `${{ steps.version.outputs.version }}`.
+
+            Review the data diff, merge, then tag `${{ steps.version.outputs.version }}`.
+          labels: tzdata

@@ -1,0 +1,166 @@
+alias TimeZone.Offset
+alias TimeZone.Rules
+alias TimeZone.Transition
+
+# Reads the TZif files that `zic` writes (RFC 8536). Only the version
+# 2 data block is used. It gives the 64-bit transition times, the
+# local time types they point at, and the POSIX TZ string in the
+# footer. Leap second records are skipped, since `Timestamp` has no
+# leap seconds either.
+#
+# This runs inside `koja run tz.generate` and nowhere else.
+
+priv const HEADER_SIZE: Int = 44
+priv const MAGIC: String = "TZif"
+priv const TIME_TYPE_SIZE: Int = 6
+
+# The six counts in a TZif header, in file order.
+priv struct TzifCounts
+  chars: Int
+  is_std: Int
+  is_ut: Int
+  leaps: Int
+  times: Int
+  types: Int
+end
+
+priv fn read_tzif(identifier: String, bytes: Binary) -> Rules ! String
+  if bytes.slice(Range{start: 0, stop: 3}).to_string().unwrap() != MAGIC
+    fail "#{identifier}: not a TZif file"
+  end
+
+  if tzif_byte(bytes, 4) < 50
+    fail "#{identifier}: TZif version 1 has no 64-bit data block"
+  end
+
+  first = read_counts(bytes, 0)
+  second_header = HEADER_SIZE + first.times * 5 + first.types * TIME_TYPE_SIZE +
+    first.chars + first.leaps * 8 + first.is_std + first.is_ut
+  counts = read_counts(bytes, second_header)
+
+  times_at = second_header + HEADER_SIZE
+  indexes_at = times_at + counts.times * 8
+  types_at = indexes_at + counts.times
+  chars_at = types_at + counts.types * TIME_TYPE_SIZE
+  footer_at = chars_at + counts.chars + counts.leaps * 12 + counts.is_std +
+    counts.is_ut
+
+  offsets = read_type_offsets(bytes, types_at, counts.types)
+  transitions: List<Transition> = List.new()
+  index = 0
+
+  while index < counts.times
+    type_index = tzif_byte(bytes, indexes_at + index)
+    transitions = transitions.append(
+      Transition{
+        at: Timestamp.new(
+          int64(bytes, times_at + index * 8),
+          Duration.Unit.Seconds,
+        ),
+        offset: try type_offset(offsets, type_index, identifier),
+      },
+    )
+    index += 1
+  end
+
+  footer = try read_footer(bytes, footer_at, identifier)
+  final = parse_posix_rule(footer)
+    rescue message -> fail "#{identifier}: #{message}"
+
+  Rules{
+    final: final,
+    identifier: identifier,
+    initial: try type_offset(offsets, 0, identifier),
+    transitions: transitions,
+  }
+end
+
+priv fn read_counts(bytes: Binary, at: Int) -> TzifCounts
+  TzifCounts{
+    chars: int32(bytes, at + 40),
+    is_std: int32(bytes, at + 24),
+    is_ut: int32(bytes, at + 20),
+    leaps: int32(bytes, at + 28),
+    times: int32(bytes, at + 32),
+    types: int32(bytes, at + 36),
+  }
+end
+
+# The UT offset of every local time type record, in file order.
+priv fn read_type_offsets(bytes: Binary, at: Int, count: Int) -> List<Offset>
+  offsets: List<Offset> = List.new()
+  index = 0
+
+  while index < count
+    offsets = offsets.append(
+      Offset{seconds: int32(bytes, at + index * TIME_TYPE_SIZE)},
+    )
+    index += 1
+  end
+
+  offsets
+end
+
+priv fn type_offset(offsets: List<Offset>, index: Int, identifier: String)
+  -> Offset ! String
+
+  match offsets.get(index)
+    Option.Some(offset) -> offset
+    Option.None -> fail "#{identifier}: time type #{index} is out of range"
+  end
+end
+
+# The POSIX TZ string between the two newlines that end the file.
+priv fn read_footer(bytes: Binary, at: Int, identifier: String)
+  -> String ! String
+
+  if tzif_byte(bytes, at) != 10
+    fail "#{identifier}: TZif footer does not start with a newline"
+  end
+
+  stop = at + 1
+
+  while stop < bytes.byte_size() and tzif_byte(bytes, stop) != 10
+    stop += 1
+  end
+
+  if stop == at + 1
+    fail "#{identifier}: TZif footer has no POSIX TZ string"
+  end
+
+  bytes.slice(Range{start: at + 1, stop: stop - 1}).to_string()
+    rescue _ -> fail "#{identifier}: TZif footer is not UTF-8"
+end
+
+priv fn tzif_byte(bytes: Binary, at: Int) -> Int
+  match bytes.at(at)
+    Option.Some(value) ->
+      value
+
+    Option.None ->
+      Kernel.panic("TZ: read past the end of a TZif file at byte #{at}")
+  end
+end
+
+priv fn int32(bytes: Binary, at: Int) -> Int
+  big_endian(bytes, at, 4)
+end
+
+priv fn int64(bytes: Binary, at: Int) -> Int
+  big_endian(bytes, at, 8)
+end
+
+# A signed big-endian integer of `size` bytes. The first byte is read
+# as signed so every partial value stays inside `Int`.
+priv fn big_endian(bytes: Binary, at: Int, size: Int) -> Int
+  first = tzif_byte(bytes, at)
+  value = first >= 128 ? first - 256 : first
+  index = 1
+
+  while index < size
+    value = value * 256 + tzif_byte(bytes, at + index)
+    index += 1
+  end
+
+  value
+end

@@ -1,0 +1,203 @@
+alias TimeZone.Offset
+alias TimeZone.Rule
+
+# Reads the POSIX TZ string that ends a TZif file, such as
+# `CST6CDT,M3.2.0,M11.1.0` or `<-03>3`, into a `TimeZone.Rule`. The
+# form is `std offset [dst [offset] ,start[/time],stop[/time]]`. A
+# POSIX offset counts west of UTC, so `6` is six hours behind, and
+# the sign flips on the way in.
+#
+# Only the `Mm.w.d` date form is accepted. `zic` writes nothing else,
+# and the two Julian forms cannot express a weekday rule.
+#
+# This runs inside `koja run tz.generate` and nowhere else.
+
+priv const DEFAULT_TRANSITION_SECONDS: Int = 7_200
+priv const SECONDS_PER_HOUR: Int = 3_600
+priv const SECONDS_PER_MINUTE: Int = 60
+
+priv fn parse_posix_rule(text: String) -> Rule ! String
+  chars = text.codepoints()
+  after_std = try scan_name(chars, 0, text)
+  (std_west, after_offset) = try scan_offset(chars, after_std, text)
+  standard = Offset{seconds: -std_west}
+
+  if after_offset >= chars.length()
+    return Rule{daylight: Option.None, standard: standard}
+  end
+
+  after_dst = try scan_name(chars, after_offset, text)
+  (daylight_seconds, after_daylight) = offset_start?(chars, after_dst)
+    ? try scan_signed_offset(chars, after_dst, text)
+    : (standard.seconds + SECONDS_PER_HOUR, after_dst)
+
+  after_first_comma = try expect(chars, after_daylight, ",", text)
+  (start, after_start) = try scan_point(chars, after_first_comma, text)
+  after_second_comma = try expect(chars, after_start, ",", text)
+  (stop, after_stop) = try scan_point(chars, after_second_comma, text)
+
+  if after_stop != chars.length()
+    fail "unexpected text after the rule in `#{text}`"
+  end
+
+  Rule{
+    daylight: Option.Some(Rule.Daylight{
+      offset: Offset{seconds: daylight_seconds},
+      start: start,
+      stop: stop,
+    }),
+    standard: standard,
+  }
+end
+
+# A daylight offset read as seconds east of UTC.
+priv fn scan_signed_offset(chars: List<String>, start: Int, text: String)
+  -> (Int, Int) ! String
+
+  (west, next) = try scan_offset(chars, start, text)
+  (-west, next)
+end
+
+# A zone name, either quoted as `<...>` or three or more letters.
+# Returns the index after the name.
+priv fn scan_name(chars: List<String>, start: Int, text: String) -> Int ! String
+  if char_at(chars, start) == "<"
+    index = start + 1
+
+    while index < chars.length() and char_at(chars, index) != ">"
+      index += 1
+    end
+
+    if index >= chars.length()
+      fail "unterminated `<` name in `#{text}`"
+    end
+
+    return index + 1
+  end
+
+  index = start
+
+  while alpha_at?(chars, index)
+    index += 1
+  end
+
+  if index - start < 3
+    fail "expected a zone name at #{start} in `#{text}`"
+  end
+
+  index
+end
+
+# `[+-]hh[:mm[:ss]]`. Returns the signed seconds and the index after.
+priv fn scan_offset(chars: List<String>, start: Int, text: String)
+  -> (Int, Int) ! String
+
+  (negative, after_sign) =
+    match char_at(chars, start)
+      "-" -> (true, start + 1)
+      "+" -> (false, start + 1)
+      _ -> (false, start)
+    end
+
+  (hours, after_hours) = try scan_number(chars, after_sign, text)
+  (minutes, after_minutes) = try scan_optional_part(chars, after_hours, text)
+  (seconds, after_seconds) = try scan_optional_part(chars, after_minutes, text)
+  total = hours * SECONDS_PER_HOUR + minutes * SECONDS_PER_MINUTE + seconds
+  (negative ? -total : total, after_seconds)
+end
+
+# `:nn` when present, otherwise zero and the same index.
+priv fn scan_optional_part(chars: List<String>, start: Int, text: String)
+  -> (Int, Int) ! String
+
+  char_at(chars, start) == ":"
+    ? try scan_number(chars, start + 1, text)
+    : (0, start)
+end
+
+# `Mm.w.d[/time]`. Returns the point and the index after it.
+priv fn scan_point(chars: List<String>, start: Int, text: String)
+  -> (Rule.Point, Int) ! String
+
+  after_m = try expect(chars, start, "M", text)
+  (month, after_month) = try scan_number(chars, after_m, text)
+  after_first_dot = try expect(chars, after_month, ".", text)
+  (week, after_week) = try scan_number(chars, after_first_dot, text)
+  after_second_dot = try expect(chars, after_week, ".", text)
+  (day, after_day) = try scan_number(chars, after_second_dot, text)
+
+  (seconds, after_time) = char_at(chars, after_day) == "/"
+    ? try scan_offset(chars, after_day + 1, text)
+    : (DEFAULT_TRANSITION_SECONDS, after_day)
+
+  if month < 1 or month > 12 or week < 1 or week > 5 or day < 0 or day > 6
+    fail "rule date M#{month}.#{week}.#{day} is out of range in `#{text}`"
+  end
+
+  point = Rule.Point{
+    month: month,
+    seconds: seconds,
+    week: week,
+    weekday: weekday_from_posix(day),
+  }
+  (point, after_time)
+end
+
+# One or more decimal digits. Returns the value and the index after.
+priv fn scan_number(chars: List<String>, start: Int, text: String)
+  -> (Int, Int) ! String
+
+  index = start
+  value = 0
+
+  while digit_at?(chars, index)
+    value = value * 10 + Int.parse(char_at(chars, index)).unwrap()
+    index += 1
+  end
+
+  if index == start
+    fail "expected a number at #{start} in `#{text}`"
+  end
+
+  (value, index)
+end
+
+priv fn expect(chars: List<String>, at: Int, wanted: String, text: String)
+  -> Int ! String
+
+  if char_at(chars, at) != wanted
+    fail "expected `#{wanted}` at #{at} in `#{text}`"
+  end
+
+  at + 1
+end
+
+priv fn offset_start?(chars: List<String>, at: Int) -> Bool
+  char = char_at(chars, at)
+  char == "+" or char == "-" or digit_at?(chars, at)
+end
+
+# `String.digit?` and `alpha?` are true for an empty string, so the
+# end of the text is checked before the predicate runs.
+priv fn digit_at?(chars: List<String>, at: Int) -> Bool
+  match chars.get(at)
+    Option.Some(char) -> char.digit?()
+    Option.None -> false
+  end
+end
+
+priv fn alpha_at?(chars: List<String>, at: Int) -> Bool
+  match chars.get(at)
+    Option.Some(char) -> char.alpha?()
+    Option.None -> false
+  end
+end
+
+# The character at `at`, or an empty string past the end so every
+# comparison against a real character fails.
+priv fn char_at(chars: List<String>, at: Int) -> String
+  match chars.get(at)
+    Option.Some(char) -> char
+    Option.None -> ""
+  end
+end

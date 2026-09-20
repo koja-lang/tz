@@ -1,0 +1,11 @@
+[project]
+authors = ["Henry Popp <henry@hpopp.dev>"]
+description = "IANA time zone rules for Koja's TimeZone"
+koja = "0.19"
+license = "MIT"
+name = "tz"
+namespace = "TZ"
+version = "2026.4.0"
+
+[tasks]
+"tz.generate" = "Generate"
