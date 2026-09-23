@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 The version follows the IANA tz database release, so `2026.4.0` carries tzdata
 `2026d`.
 
-## [Unreleased]
+## [2026.4.0] - 2026-09-23
 
 Requires Koja 0.19.
 
