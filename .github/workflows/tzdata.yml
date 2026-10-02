@@ -1,8 +1,12 @@
 name: tzdata
 
 # Checks IANA once a day. When a release newer than the one in
-# src/data/ exists, regenerates the data, bumps the version, and opens
-# a pull request for review.
+# src/data/ exists, cuts the next version in CHANGELOG.md and koja.toml,
+# regenerates the data, and opens a pull request for review.
+#
+# The run fails when CHANGELOG.md has an `## [Unreleased]` heading.
+# Pending work on main needs a person to decide how it ships, so the
+# tzdata bump waits until that section is released.
 
 on:
   schedule:
@@ -39,17 +43,7 @@ jobs:
             echo "update=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Install koja
-        if: steps.latest.outputs.update == 'true'
-        uses: koja-lang/setup-koja@v1
-        with:
-          koja-version-file: koja.toml
-
-      - name: Regenerate src/data
-        if: steps.latest.outputs.update == 'true'
-        run: bin/update-tzdata.sh "${{ steps.latest.outputs.latest }}"
-
-      - name: Bump the version
+      - name: Cut the release
         if: steps.latest.outputs.update == 'true'
         id: version
         run: |
@@ -60,8 +54,18 @@ jobs:
           index=$(( $(printf '%d' "'$letter") - 96 ))
           version="$year.$index.0"
           sed -i "s/^version = \".*\"$/version = \"$version\"/" koja.toml
-          bin/changelog-add.sh Changed "tzdata $release."
+          bin/changelog-release.sh "$version" Changed "tzdata $release."
           echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install koja
+        if: steps.latest.outputs.update == 'true'
+        uses: koja-lang/setup-koja@v1
+        with:
+          koja-version-file: koja.toml
+
+      - name: Regenerate src/data
+        if: steps.latest.outputs.update == 'true'
+        run: bin/update-tzdata.sh "${{ steps.latest.outputs.latest }}"
 
       - name: Check the result
         if: steps.latest.outputs.update == 'true'
@@ -78,8 +82,9 @@ jobs:
           title: "Update to tzdata ${{ steps.latest.outputs.latest }}"
           body: |
             IANA published tzdata ${{ steps.latest.outputs.latest }}. This
-            regenerates `src/data/` from it and sets the version to
-            `${{ steps.version.outputs.version }}`.
+            regenerates `src/data/` from it and cuts
+            `${{ steps.version.outputs.version }}` in `CHANGELOG.md` and
+            `koja.toml`.
 
             Review the data diff, merge, then tag `${{ steps.version.outputs.version }}`.
           labels: tzdata

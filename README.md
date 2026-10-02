@@ -74,8 +74,9 @@ The script downloads the release from IANA, compiles it with `zic`, runs
 `koja run tz.generate` to rewrite `src/data/`, and formats the output. The
 generator reads the TZif files, packs each zone into one string, and checks
 that the string decodes back to the same rules. It needs `curl`, `tar`, `awk`,
-`zic`, and `koja`. A daily workflow opens a pull request with the result when
-IANA publishes a release.
+`zic`, and `koja`. A daily workflow runs it when IANA publishes a release,
+cuts the next version in `CHANGELOG.md` and `koja.toml`, and opens a pull
+request with the result.
 
 ## License
 

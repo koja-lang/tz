@@ -18,7 +18,10 @@ The packed text format is described at the top of `src/packed.koja`.
 
 The version follows the IANA release, so `2026.4.0` is tzdata `2026d`.
 `CHANGELOG.md` follows Keep a Changelog. A tzdata bump is a `Changed`
-entry, which `bin/changelog-add.sh` writes for the daily workflow.
+entry in a new release section, which `bin/changelog-release.sh`
+writes for the daily workflow. The workflow fails while the file has
+an `## [Unreleased]` heading, so release pending work before IANA
+publishes, or expect the next run to stop and wait.
 
 ## Look up documentation
 
