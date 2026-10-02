@@ -189,7 +189,8 @@ priv fn index_content(
     ? "#{function_name(OTHER_REGION)}(identifier)"
     : "Option.None"
 
-  lines = lines.append("    _ -> #{fallback}")
+  lines =
+    lines.append("    _ -> #{fallback}")
     .append("  end")
     .append("end")
     .append("")
@@ -201,7 +202,8 @@ priv fn index_content(
     lines = lines.append("    #{quote(name)} -> Option.Some(#{quote(target)})")
   end
 
-  lines = lines.append("    _ -> Option.None")
+  lines =
+    lines.append("    _ -> Option.None")
     .append("  end")
     .append("end")
     .append("")
@@ -212,7 +214,8 @@ priv fn index_content(
     lines = lines.append("    #{quote(zone)},")
   end
 
-  lines = lines.append("  ]")
+  lines =
+    lines.append("  ]")
     .append("end")
     .append("")
     .append("priv fn link_identifiers -> List<String>")
