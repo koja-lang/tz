@@ -5,7 +5,7 @@ koja = "0.19"
 license = "MIT"
 name = "tz"
 namespace = "TZ"
-version = "2026.4.0"
+version = "2026.5.0"
 
 [tasks]
 "tz.generate" = "Generate"
